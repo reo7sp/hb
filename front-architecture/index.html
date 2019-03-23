@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Методичка по архитектуре</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            font-size: 16px;
+            color: #222222;
+            margin: 16px;
+        }
+
+        p, li {
+            line-height: 1.6em;
+        }
+
+        p {
+            margin: 0.8em 0;
+        }
+
+        a {
+            color: #0060a0;
+            text-decoration: none;
+            border-bottom: 1px solid rgba(0, 96, 160, 0.2);
+        }
+        a:hover {
+            color: #d04000;
+            border-bottom-color: rgba(208, 64, 0, 0.2);
+        }
+        h1 a {
+            border-bottom-width: 2px;
+        }
+
+        h2 {
+            margin-top: 4em;
+        }
+
+        img {
+            max-width: 100%;
+        }
+
+        pre code {
+            font-family: Menlo, Consolas, Ubuntu Mono, monospace;
+            line-height: 1.6em;
+        }
+
+        .site-container {
+            max-width: 768px;
+            margin: 4em auto 12em auto;
+        }
+
+        .header-image-container {
+            height: 300px;
+            overflow: hidden;
+        }
+
+        .header-image-container__image {
+            vertical-align: center;
+            margin-top: -25%;
+            filter: contrast(0.5);
+        }
+
+        .center-image {
+            display: block;
+            margin: 2em auto;
+        }
+
+        .warning {
+            position: relative;;
+            margin: 2em 0 1em 0;
+            padding: 1.5em 1em;
+            box-shadow: 0px 3px 8px 0px #f88;
+            border-radius: 8px;
+        }
+
+        .warning__icon {
+            position: absolute;
+            font-size: 2em;
+        }
+
+        .warning__title {
+            position: relative;
+            left: 42px;
+            margin-bottom: 0.5em;
+            margin-right: 42px;
+            font-weight: bold;
+        }
+
+        .warning__desc {
+            position: relative;
+            left: 42px;
+            margin-right: 42px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="site-container">
+
+        <h1>Методичка по архитектуре</h1>
+        <p>Пошаговый гайд А → Б.</p>
+        <p>Для курса фронтенда в Технопарке Mail.Ru.</p>
+        <p>
+            <div class="header-image-container">
+                <img class="header-image-container__image" src="img/header.gif">
+            </div>
+        </p>
+
+        <br>
+
+
+        <h2>Как сейчас</h2>
+        <p><img class="center-image" src="img/diag_1.svg"></p>
+        <p>Uh oh.</p>
+
+
+        <h2>Расплетаем зависимости</h2>
+        <p>У нас много зависимостей между объектами. Способ расплести эти зависимости — это делегировать все отдельному модулю, через который ходить будут все (паттерн медиатор).</p>
+        <p>Назовем этот слой контроллерами.</p>
+        <p><img class="center-image" src="img/diag_2.svg"></p>
+        <br>
+
+        <p>Код:</p>
+        <pre><code class="js">
+class ControllersStore {
+    constructor(api, state) {
+        this.user = new UserController(this, api, state);
+        this.leaderboard = new LeaderboardController(this, api, state);
+    }
+}
+
+class UserController {
+    constructor(store, api, state) {
+        this._store = store;
+        this._api = api;
+        this._state = state;
+    }
+
+    loadUser({forceReload = false} = {}) {
+        if (this._state.currentUser && !forceReload) {
+            return Promise.resolve(this._state.currentUser);
+        }
+        return this._api.getUser().
+            then((user) => {
+                this._state.currentUser = user;
+                return user;
+            });
+    }
+}
+
+class LeaderboardController {
+    constructor(store, api, state) {
+        this._store = store;
+        this._api = api;
+        this._state = state;
+    }
+
+    loadLeaderboard({forceReload = false} = {}) {
+        if (this._state.leaderboard && !forceReload) {
+            return Promise.resolve(this._state.leaderboard);
+        }
+        return this._api.getLeaderboard().
+            then((leaderboard) => {
+                this._state.leaderboard = leaderboard;
+                return leaderboard;
+            });
+    }
+
+    updateScore(newScore) {
+        return Promise.all([this.loadLeaderboard(), this._store.user.loadUser()]).
+            then((leaderboard, user) => {
+                leaderboard[user.name] = newScore;
+                return this._api.updateLeaderboardScore(newScore);
+            });
+    }
+}
+        </code></pre>
+
+
+        <h2>Добавляем контур обратной связи</h2>
+        <p>Окей, мы можем из какой-то игровой вьюхи прибавить очков текущему игроку и послать изменение через `updateScore`. А что делать, когда наоборот — приходит изменение из вне и надо обновить вьюху? Например, мы в реалтайме обновляем лидерборду и сервер ответил, что у какого-то другого игрока изменился счет.</p>
+        <p>Для этого реализуем рассылку событий при изменении состояния и возможность подписываться на них (паттерн eventbus).</p>
+        <p><img class="center-image" src="img/diag_3.svg"></p>
+        <br>
+
+        <p>Код:</p>
+        <pre><code class="js">
+class StateEventBus {
+    constructor() {
+        this._subscribers = [];
+    }
+    
+    subscribe(fn) {
+        this._subscribers.push(fn);
+    }
+    
+    unsubscribe(fn) {
+        const index = this._subscribers.indexOf(fn);
+        if (index < 0) {
+            return;
+        }
+        this._subscribers.splice(index, 1);
+    }
+
+    _emit(state, key, value) {
+        for (const fn of this._subscribers) {
+            fn(state, key, value);
+        }
+    }
+}
+
+class StateHolder {
+    constructor(stateEventBus) {
+        this.state = watchObjectChanges({}, (state, key, value) => stateEventBus._emit(state, key, value));
+    }
+}
+        </code></pre>
+        <pre><code class="js">
+function _watchObjectChanges(originalObject, breadcrumbs, listenerFn) {
+    if (!originalObject || typeof originalObject !== 'object') {
+        return originalObject;
+    }
+    for (const k in originalObject) {
+        if (originalObject.hasOwnProperty(k)) {
+            originalObject[k] = _watchObjectChanges(originalObject[k], breadcrumbs.concat([k]), listenerFn);
+        }
+    }
+    const watcher = {
+        set: (obj, k, v) => {
+            obj[k] = _watchObjectChanges(v, breadcrumbs.concat([k]), listenerFn);
+            listenerFn(obj, breadcrumbs.concat([k]), obj[k]);
+            return true;
+        }
+    };
+    return new Proxy(originalObject, watcher);
+}
+
+function watchObjectChanges(originalObject, listenerFn) {
+    return _watchObjectChanges(originalObject, [], listenerFn);
+}
+
+export default watchObjectChanges;
+        </code></pre>
+
+
+        <h2><i>That's all, folks!</i></h2>
+        <p style="margin-bottom: 0">Содержание методички:</p>
+        <ul style="margin-top: 0">
+            <li>1. Паттерн медиатор. Контроллеры.</li>
+            <li>2. Паттерн eventbus. Подписка на изменение состояния.</li>
+        </ul>
+        <div class="warning">
+            <div class="warning__icon">⚠️</div>
+            <div class="warning__title">В примерах опущены проверки аргументов для краткости</div>
+            <div class="warning__desc">У себя стоит всегда проверять, так как в функции может придти все что угодно.</div>
+        </div>
+        <div class="warning">
+            <div class="warning__icon">⚠️</div>
+            <div class="warning__title">В примерах опущены комменты jsdoc</div>
+            <div class="warning__desc">В своем коде стоит писать, чтобы и сокомандникам было все понятно (даже спустя месяц, 6 месяцев, год), и IDE все типы подсказывала.</div>
+        </div>
+        <div class="warning">
+            <div class="warning__icon">⚠️</div>
+            <div class="warning__title">В примерах приведен приблизительный рабочий код</div>
+            <div class="warning__desc">Скорее всего можно будет сделать по-удобнее. Не копипастьте сразу! :)</div>
+        </div>
+
+    </div>
+
+
+    <link rel="stylesheet" href="lib/highlight.min.css">
+    <script src="lib/highlight.min.js"></script>
+    <script>hljs.initHighlightingOnLoad();</script>
+
+</body>
+</html>
